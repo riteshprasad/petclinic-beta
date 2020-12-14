@@ -1,0 +1,245 @@
+#!groovy
+pipeline {
+agent any
+environment {
+    APP_NAME = 'petclinic'
+    BUILD_NUMBER = "${env.BUILD_NUMBER}"
+    IMAGE_VERSION="v_${BUILD_NUMBER}"
+    GIT_URL="https://github.com/spring-projects/spring-${APP_NAME}.git"
+    SBT_OPTS='-Xmx1024m -Xms512m'
+    JAVA_OPTS='-Xmx1024m -Xms512m'
+}
+
+options {
+    buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '10', numToKeepStr: '20'))
+    timestamps()
+    retry(3)
+    timeout time:10, unit:'MINUTES'
+}
+parameters {
+    string(defaultValue: "develop", description: 'Branch Specifier', name: 'SPECIFIER')
+    booleanParam(defaultValue: false, description: 'Deploy to QA Environment ?', name: 'DEPLOY_QA')
+    booleanParam(defaultValue: false, description: 'Deploy to UAT Environment ?', name: 'DEPLOY_UAT')
+    booleanParam(defaultValue: false, description: 'Deploy to PROD Environment ?', name: 'DEPLOY_PROD')
+}
+stages {
+    stage("Initialize") {
+        steps {
+            echo "Initialize the Job"
+        }
+    }
+stage('Checkout') {
+    steps {
+       echo "Cloning repo"
+    }
+}
+stage('Build') {
+            steps {
+                echo 'Run coverage and CLEAN UP Before please'
+                
+            }
+        }
+stage('Publish Reports') {
+    parallel {
+        stage('Publish FindBugs Report') {
+            steps {
+                echo 'FindBugs ReportAnalyis'
+            }
+        }
+        stage('Publish Junit Report') {
+            steps {
+               echo "Publish Junit Report"
+            }
+        }
+        stage('Publish Junit HTML Report') {
+            steps {
+               echo "Publish Junit HTML Report"
+            }
+        }
+        stage('Publish Coverage HTML Report') {
+            steps {
+                echo "Publish Coverage HTML Report"
+            }
+        }
+        stage('Execute Whitesource Analysis') {
+            steps {
+                echo "Execute Whitesource Analysis"
+            }
+        }
+        stage('SonarQube analysis') {
+            steps {
+                echo "SonarQube analysis"
+            }
+        }
+        stage('ArchiveArtifact') {
+            steps {
+                echo "ArchiveArtifact"
+            }
+        }
+    }
+}
+
+ stage('Docker Tag & Push') {
+     steps {
+         echo "Docker Image Tagging"
+     }
+ }
+ 
+ Steps{
+    stage('Deploy to CI') {
+            steps {
+                echo "Deploying to CI Environment."
+            }
+        }
+    stage('Integration testing & Smoke Testing') {
+         steps {
+                echo "Integration & Smoke testing to CI Environment."
+            }
+        }
+ }
+ stage('Deploy to QA') {
+    steps{
+        stage('Deploy to QA') {
+            when {
+                expression {
+                    params.DEPLOY_QA == true
+                }
+            }
+            steps {
+                echo "Deploy to QA..."
+            }
+        }
+            stage('Functional Testing ') {
+                echo "Funcation Testing on QA/DEV Environment."
+            }
+        }
+    }
+ }
+stage('Deploy to UAT / Pre-Production') {
+        stage('Deploy to UAT') {
+            when {
+                expression {
+                    params.DEPLOY_UAT == true
+                }
+            }
+            steps {
+                echo "Deploy to UAT..."
+                }
+             steps('Funcational Testing ') {
+                echo "Funcation Testing on QA/DEV Environment."
+            }
+        }
+    }
+stage('Deploy to Production') {
+        stage('Deploy to Production') {
+            when {
+                expression {
+                    params.DEPLOY_PROD == true
+                }
+            }
+            steps {
+                echo "Deploy to PROD..."
+            }
+        }
+    }
+}
+
+    post {
+        /*
+         * These steps will run at the end of the pipeline based on the condition.
+         * Post conditions run in order regardless of their place in the pipeline
+         * 1. always - always run
+         * 2. changed - run if something changed from the last run
+         * 3. aborted, success, unstable or failure - depending on the status
+         */
+        always {
+            echo "I AM ALWAYS first"
+            
+        }
+        aborted {
+            echo "BUILD ABORTED"
+        }
+        success {
+            echo "BUILD SUCCESS"
+            echo "Keep Current Build If branch is master"
+//            keepThisBuild()
+        }
+        unstable {
+            echo "BUILD UNSTABLE"
+        }
+        failure {
+            echo "BUILD FAILURE"
+        }
+    }
+def keepThisBuild() {
+    currentBuild.setKeepLog(true)
+    currentBuild.setDescription("Test Description")
+}
+
+def getShortCommitHash() {
+    return sh(returnStdout: true, script: "git log -n 1 --pretty=format:'%h'").trim()
+}
+
+def getChangeAuthorName() {
+    return sh(returnStdout: true, script: "git show -s --pretty=%an").trim()
+}
+
+def getChangeAuthorEmail() {
+    return sh(returnStdout: true, script: "git show -s --pretty=%ae").trim()
+}
+
+def getChangeSet() {
+    return sh(returnStdout: true, script: 'git diff-tree --no-commit-id --name-status -r HEAD').trim()
+}
+
+def getChangeLog() {
+    return sh(returnStdout: true, script: "git log --date=short --pretty=format:'%ad %aN <%ae> %n%n%x09* %s%d%n%b'").trim()
+}
+
+def getCurrentBranch () {
+    return sh (
+            script: 'git rev-parse --abbrev-ref HEAD',
+            returnStdout: true
+    ).trim()
+}
+
+def isPRMergeBuild() {
+    return (env.BRANCH_NAME ==~ /^PR-\d+$/)
+}
+
+def notifyBuild(String buildStatus = 'STARTED') {
+    // build status of null means successful
+    buildStatus = buildStatus ?: 'SUCCESS'
+
+    def branchName = getCurrentBranch()
+    def shortCommitHash = getShortCommitHash()
+    def changeAuthorName = getChangeAuthorName()
+    def changeAuthorEmail = getChangeAuthorEmail()
+    def changeSet = getChangeSet()
+    def changeLog = getChangeLog()
+
+    // Default values
+    def colorName = 'RED'
+    def colorCode = '#FF0000'
+    def subject = "${buildStatus}: '${env.JOB_NAME} [${env.BUILD_NUMBER}]'" + branchName + ", " + shortCommitHash
+    def summary = "Started: Name:: ${env.JOB_NAME} \n " +
+            "Build Number: ${env.BUILD_NUMBER} \n " +
+            "Build URL: ${env.BUILD_URL} \n " +
+            "Short Commit Hash: " + shortCommitHash + " \n " +
+            "Branch Name: " + branchName + " \n " +
+            "Change Author: " + changeAuthorName + " \n " +
+            "Change Author Email: " + changeAuthorEmail + " \n " +
+            "Change Set: " + changeSet
+
+    if (buildStatus == 'STARTED') {
+        color = 'YELLOW'
+        colorCode = '#FFFF00'
+    } else if (buildStatus == 'SUCCESS') {
+        color = 'GREEN'
+        colorCode = '#00FF00'
+    } else {
+        color = 'RED'
+        colorCode = '#FF0000'
+    }
+
+}
